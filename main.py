@@ -1,11 +1,15 @@
 import argparse
 import asyncio
+import sys
 import time
 from collections import defaultdict
+from typing import List
+from urllib.parse import urlparse
+
 import aiohttp
 
 
-async def ping_host(session, url):
+async def ping_host(session: aiohttp.ClientSession, url: str) -> tuple:
     """
     Выполняет одиночный HTTP GET-запрос к указанному URL и измеряет производительность.
 
@@ -27,15 +31,52 @@ async def ping_host(session, url):
                 return url, "failed", duration
     except aiohttp.ClientError as e:
         duration = time.monotonic() - start_time
-        print(f"[ОШИБКА] Не удалось подключиться к {url}. Причина: {e}")
+        print(f"[ОШИБКА] Не удалось подключиться к {url}. Причина: {e}", file=sys.stderr)
         return url, "error", duration
     except asyncio.TimeoutError:
         duration = time.monotonic() - start_time
-        print(f"[ОШИБКА] Запрос к {url} превысил время ожидания.")
+        print(f"[ОШИБКА] Запрос к {url} превысил время ожидания.", file=sys.stderr)
         return url, "error", duration
 
+def validate_count(count: int) -> None:
+    """
+    Проверяет, что количество запросов > 0, иначе завершает программу.
+    """
+    if count < 1:
+        print("[ОШИБКА] Количество запросов (--count) должно быть больше нуля.", file=sys.stderr)
+        sys.exit(1)
 
-async def main():
+def validate_urls(raw_hosts: List[str]) -> List[str]:
+    """
+    Проверяет список URL-адресов, возвращая список валидных или завершая программу.
+    """
+    valid_hosts: List[str] = []
+    invalid_hosts: List[str] = []
+
+    for host in raw_hosts:
+        if not host:
+            continue
+        try:
+            parsed_url = urlparse(host)
+            if parsed_url.scheme and parsed_url.netloc:
+                valid_hosts.append(host)
+            else:
+                invalid_hosts.append(host)
+        except ValueError:
+            invalid_hosts.append(host)
+
+    if invalid_hosts:
+        print(f"[ОШИБКА] Обнаружены некорректные или неполные URL: {', '.join(invalid_hosts)}", file=sys.stderr)
+        print("Пожалуйста, укажите полные URL, включая схему (например, 'https://google.com').", file=sys.stderr)
+        sys.exit(1)
+
+    if not valid_hosts:
+        print("[ОШИБКА] Не найдено ни одного корректного URL для тестирования.", file=sys.stderr)
+        sys.exit(1)
+    
+    return valid_hosts
+
+async def main() -> None:
     """
     Основная функция для парсинга аргументов, запуска тестов и отображения статистики.
     """
@@ -58,7 +99,10 @@ async def main():
     )
 
     args = parser.parse_args()
-    hosts = [host.strip() for host in args.hosts.split(",")]
+    
+    validate_count(args.count)
+    raw_hosts = [host.strip() for host in args.hosts.split(',')]
+    hosts = validate_urls(raw_hosts)
     count = args.count
 
     print(f"Тестируем хосты: {', '.join(hosts)}")
